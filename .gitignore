@@ -1,0 +1,27 @@
+# Environment and credentials
+.env
+*.log
+
+# Data exports
+*.csv
+*.json
+network_data*
+network_report*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

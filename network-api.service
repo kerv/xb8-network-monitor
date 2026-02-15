@@ -1,0 +1,14 @@
+[Unit]
+Description=Network Monitor API
+After=network.target
+
+[Service]
+Type=simple
+User=kerv
+WorkingDirectory=/path/to/network-monitor
+ExecStart=/usr/bin/python3 /path/to/network-monitor/network_api.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

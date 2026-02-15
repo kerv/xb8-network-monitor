@@ -1,0 +1,10 @@
+services:
+  monitor:
+    build: .
+    container_name: network-monitor-app
+    env_file:
+      - .env
+    ports:
+      - "5003:5000"
+    restart: unless-stopped
+    network_mode: host
