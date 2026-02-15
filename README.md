@@ -4,6 +4,12 @@ Real-time network monitoring dashboard for cable modem connections. Tracks laten
 
 **Compatibility**: May work with Comcast Xfinity and other cable ISPs using DOCSIS modems with web interfaces.
 
+## Screenshots
+
+![Dashboard Overview](1.png)
+![Signal Quality](2.png)
+![Channel Analysis](3.png)
+
 ## Features
 
 - **Ping Monitoring**: Continuous ping tests to Google DNS and CMTS (first hop)
