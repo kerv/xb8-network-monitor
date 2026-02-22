@@ -1,5 +1,8 @@
 # Environment and credentials
 .env
+
+# Agent guidelines (local only)
+AGENTS.md
 *.log
 
 # Data exports

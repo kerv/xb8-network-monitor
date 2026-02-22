@@ -11,7 +11,7 @@ DEPLOY_PATH="${DASHBOARD_DEPLOY_PATH:-/var/www/html/network.html}"
 echo "Deploying network monitor dashboard..."
 
 # Copy dashboard to deployment location
-cp dashboard.html "$DEPLOY_PATH"
+cp network.html "$DEPLOY_PATH"
 
 echo "✓ Dashboard deployed to $DEPLOY_PATH"
 

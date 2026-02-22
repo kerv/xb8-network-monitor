@@ -136,7 +136,7 @@ def decimate_tests(tests, target=2000):
 @app.route('/')
 @app.route('/network.html')
 def dashboard():
-    return send_file('dashboard.html')
+    return send_file('network.html')
 
 @app.route('/api/network/data')
 def get_data():

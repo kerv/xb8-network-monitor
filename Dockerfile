@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt gunicorn
 COPY network_monitor.py .
 COPY network_api.py .
 COPY weather_tracker.py .
-COPY dashboard.html .
+COPY network.html .
 COPY .env .
 
 # Create startup script

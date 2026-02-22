@@ -161,7 +161,7 @@ docker compose up -d --build
 
 - **network_monitor.py**: Background service that scrapes modem data and runs ping tests every 10 seconds
 - **network_api.py**: Flask API serving data and dashboard HTML
-- **dashboard.html**: Interactive web dashboard with Chart.js visualizations
+- **network.html**: Interactive web dashboard with Chart.js visualizations
 - **PostgreSQL**: External database for time-series data storage
 
 ## Environment Variables Reference
