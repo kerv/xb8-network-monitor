@@ -124,7 +124,7 @@ yourdomain.com {
 }
 ```
 
-Replace `192.168.1.100` with your Docker host's IP address.
+Replace `192.168.1.100` with your Docker host's IP address. Note: typical Rogers/Shaw modems default to `10.0.0.1`, not `192.168.1.100`.
 
 Reload Caddy:
 ```bash
