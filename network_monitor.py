@@ -58,8 +58,16 @@ def speed_test():
     except:
         return None, None
 
-def get_db():
-    return psycopg2.connect(**DB_CONFIG)
+def get_db(retries=30, delay=2):
+    for attempt in range(retries):
+        try:
+            return psycopg2.connect(**DB_CONFIG)
+        except psycopg2.OperationalError:
+            if attempt < retries - 1:
+                print(f"DB connection failed (attempt {attempt + 1}/{retries}), retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                raise
 
 def insert_ping(timestamp, ping, packet_loss, status):
     conn = get_db()

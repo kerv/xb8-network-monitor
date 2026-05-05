@@ -138,6 +138,80 @@ def decimate_tests(tests, target=2000):
 def dashboard():
     return send_file('network.html')
 
+
+def get_summary_from_db(cur, cutoff=None):
+    """Calculate summary statistics in SQL instead of fetching all rows"""
+    where = "WHERE p.timestamp >= %s" if cutoff else ""
+    params = (cutoff,) if cutoff else ()
+
+    cur.execute(f"""
+        WITH bucketed AS (
+            SELECT DISTINCT ON (date_trunc('second', p.timestamp) - (EXTRACT(SECOND FROM p.timestamp)::int %% 10) * INTERVAL '1 second')
+                   p.ping, p.packet_loss, p.status, c.ping as cmts_ping, c.packet_loss as cmts_packet_loss
+            FROM ping_tests p
+            LEFT JOIN cmts_tests c ON p.timestamp = c.timestamp
+            {where}
+            ORDER BY date_trunc('second', p.timestamp) - (EXTRACT(SECOND FROM p.timestamp)::int %% 10) * INTERVAL '1 second', p.timestamp
+        )
+        SELECT
+            COUNT(*) as total_tests,
+            SUM(CASE WHEN status = 'HIGH_LATENCY' THEN 1 ELSE 0 END) as high_latency,
+            SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failures,
+            SUM(CASE WHEN packet_loss > 0 THEN 1 ELSE 0 END) as google_packet_loss,
+            ROUND(AVG(CASE WHEN ping > 0 THEN ping END)::numeric, 1) as avg_latency,
+            ROUND(AVG(packet_loss)::numeric, 1) as avg_packet_loss,
+            SUM(CASE WHEN cmts_packet_loss > 0 THEN 1 ELSE 0 END) as cmts_packet_loss,
+            ROUND(AVG(CASE WHEN cmts_ping > 0 THEN cmts_ping END)::numeric, 1) as avg_cmts_latency,
+            ROUND(AVG(cmts_packet_loss)::numeric, 1) as avg_cmts_packet_loss
+        FROM bucketed
+    """, params)
+    row = cur.fetchone()
+
+    cur.execute(f"""
+        SELECT ROUND(AVG(CASE WHEN download > 0 THEN download END)::numeric, 1) as avg_download,
+               ROUND(AVG(CASE WHEN upload > 0 THEN upload END)::numeric, 1) as avg_upload
+        FROM speed_tests {"WHERE timestamp >= %s" if cutoff else ""}
+    """, params)
+    speed = cur.fetchone()
+
+    avg_latency = float(row['avg_latency']) if row['avg_latency'] else 0
+    avg_cmts = float(row['avg_cmts_latency']) if row['avg_cmts_latency'] else 0
+
+    return {
+        'total_tests': row['total_tests'],
+        'high_latency': row['high_latency'],
+        'failures': row['failures'],
+        'google_packet_loss': row['google_packet_loss'],
+        'cmts_packet_loss': row['cmts_packet_loss'],
+        'avg_latency': avg_latency,
+        'avg_packet_loss': float(row['avg_packet_loss']) if row['avg_packet_loss'] else 0,
+        'avg_cmts_latency': avg_cmts,
+        'avg_cmts_packet_loss': float(row['avg_cmts_packet_loss']) if row['avg_cmts_packet_loss'] else 0,
+        'latency_diff': round(avg_cmts - avg_latency, 1),
+        'avg_download': float(speed['avg_download']) if speed['avg_download'] else None,
+        'avg_upload': float(speed['avg_upload']) if speed['avg_upload'] else None
+    }
+
+
+def get_hourly_avg_from_db(cur, cutoff=None):
+    """Calculate hourly packet loss averages in SQL"""
+    where = "AND timestamp >= %s" if cutoff else ""
+    params = (cutoff,) if cutoff else ()
+
+    cur.execute(f"""
+        SELECT EXTRACT(HOUR FROM timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::int as hour,
+               AVG(packet_loss) as avg_loss
+        FROM ping_tests
+        WHERE TRUE {where}
+        GROUP BY hour
+    """, params)
+
+    hourly = [0.0] * 24
+    for row in cur.fetchall():
+        hourly[row['hour']] = float(row['avg_loss']) if row['avg_loss'] else 0
+    return hourly
+
+
 @app.route('/api/network/data')
 def get_data():
     minutes = request.args.get('minutes', type=int)
@@ -145,30 +219,54 @@ def get_data():
     conn = get_db()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
-    if minutes:
-        cutoff = datetime.now() - timedelta(minutes=minutes)
+    cutoff = datetime.now() - timedelta(minutes=minutes) if minutes else None
+
+    # For "All" queries, sample data in SQL to avoid fetching 500K+ rows
+    # Use TABLESAMPLE for bulk, then UNION outliers to preserve them
+    if cutoff:
         cur.execute(
             "SELECT timestamp, ping, packet_loss, status FROM ping_tests WHERE timestamp >= %s ORDER BY timestamp",
             (cutoff,)
         )
     else:
-        cur.execute("SELECT timestamp, ping, packet_loss, status FROM ping_tests ORDER BY timestamp")
+        # For "All" view, aggregate into 15-minute buckets with avg + max
+        cur.execute("""
+            SELECT date_trunc('hour', p.timestamp) + INTERVAL '15 min' * FLOOR(EXTRACT(MINUTE FROM p.timestamp) / 15) as timestamp,
+                   AVG(p.ping) as ping, MAX(p.packet_loss) as packet_loss,
+                   CASE WHEN MAX(CASE WHEN p.status = 'FAILED' THEN 1 ELSE 0 END) = 1 THEN 'FAILED'
+                        WHEN MAX(CASE WHEN p.status = 'HIGH_LATENCY' THEN 1 ELSE 0 END) = 1 THEN 'HIGH_LATENCY'
+                        WHEN MAX(CASE WHEN p.status = 'PACKET_LOSS' THEN 1 ELSE 0 END) = 1 THEN 'PACKET_LOSS'
+                        ELSE 'OK' END as status
+            FROM ping_tests p
+            GROUP BY 1 ORDER BY 1
+        """)
     
     ping_tests = cur.fetchall()
+    ping_timestamps = {row['timestamp'] for row in ping_tests}
     
-    # Get CMTS tests
-    if minutes:
+    # Get CMTS tests - only for timestamps we have ping data for
+    if cutoff:
         cur.execute(
             "SELECT timestamp, ping, packet_loss, status FROM cmts_tests WHERE timestamp >= %s ORDER BY timestamp",
             (cutoff,)
         )
     else:
-        cur.execute("SELECT timestamp, ping, packet_loss, status FROM cmts_tests ORDER BY timestamp")
+        cur.execute("""
+            SELECT date_trunc('hour', c.timestamp) + INTERVAL '15 min' * FLOOR(EXTRACT(MINUTE FROM c.timestamp) / 15) as timestamp,
+                   AVG(c.ping) as ping, MAX(c.packet_loss) as packet_loss,
+                   CASE WHEN MAX(CASE WHEN c.status = 'FAILED' THEN 1 ELSE 0 END) = 1 THEN 'FAILED'
+                        WHEN MAX(CASE WHEN c.status = 'HIGH_LATENCY' THEN 1 ELSE 0 END) = 1 THEN 'HIGH_LATENCY'
+                        WHEN MAX(CASE WHEN c.status = 'PACKET_LOSS' THEN 1 ELSE 0 END) = 1 THEN 'PACKET_LOSS'
+                        ELSE 'OK' END as status
+            FROM cmts_tests c
+            GROUP BY 1 ORDER BY 1
+        """)
     
     cmts_tests = {row['timestamp']: row for row in cur.fetchall()}
-    
+    BUCKET_EXPR = "date_trunc('hour', timestamp) + INTERVAL '15 min' * FLOOR(EXTRACT(MINUTE FROM timestamp) / 15)"
+
     # Get channel codewords and find top 5 worst channels
-    if minutes:
+    if cutoff:
         cur.execute(
             "SELECT channel_id, MAX(correctable) as max_correctable FROM channel_codewords WHERE timestamp >= %s GROUP BY channel_id ORDER BY max_correctable DESC LIMIT 5",
             (cutoff,)
@@ -181,14 +279,14 @@ def get_data():
     # Get codeword data for top channels
     channel_data = {}
     if top_channels:
-        if minutes:
+        if cutoff:
             cur.execute(
                 "SELECT timestamp, channel_id, correctable, uncorrectable FROM channel_codewords WHERE channel_id = ANY(%s) AND timestamp >= %s ORDER BY timestamp",
                 (top_channels, cutoff)
             )
         else:
             cur.execute(
-                "SELECT timestamp, channel_id, correctable, uncorrectable FROM channel_codewords WHERE channel_id = ANY(%s) ORDER BY timestamp",
+                f"SELECT {BUCKET_EXPR} as timestamp, channel_id, MAX(correctable) as correctable, MAX(uncorrectable) as uncorrectable FROM channel_codewords WHERE channel_id = ANY(%s) GROUP BY 1, channel_id ORDER BY 1",
                 (top_channels,)
             )
         
@@ -202,7 +300,7 @@ def get_data():
             }
     
     # Get speed tests
-    if minutes:
+    if cutoff:
         cur.execute(
             "SELECT timestamp, download, upload FROM speed_tests WHERE timestamp >= %s ORDER BY timestamp",
             (cutoff,)
@@ -222,13 +320,21 @@ def get_data():
         })
     
     # Get modem signals
-    if minutes:
+    if cutoff:
         cur.execute(
             "SELECT timestamp, downstream_avg_snr, downstream_min_snr, downstream_avg_power, downstream_max_power, upstream_avg_power, correctable_codewords, uncorrectable_codewords, worst_channel_id, worst_channel_correctable, worst_channel_uncorrectable FROM modem_signals WHERE timestamp >= %s ORDER BY timestamp",
             (cutoff,)
         )
     else:
-        cur.execute("SELECT timestamp, downstream_avg_snr, downstream_min_snr, downstream_avg_power, downstream_max_power, upstream_avg_power, correctable_codewords, uncorrectable_codewords, worst_channel_id, worst_channel_correctable, worst_channel_uncorrectable FROM modem_signals ORDER BY timestamp")
+        cur.execute(f"""
+            SELECT {BUCKET_EXPR} as timestamp,
+                   AVG(downstream_avg_snr) as downstream_avg_snr, MIN(downstream_min_snr) as downstream_min_snr,
+                   AVG(downstream_avg_power) as downstream_avg_power, MAX(downstream_max_power) as downstream_max_power,
+                   AVG(upstream_avg_power) as upstream_avg_power,
+                   MAX(correctable_codewords) as correctable_codewords, MAX(uncorrectable_codewords) as uncorrectable_codewords,
+                   NULL::int as worst_channel_id, NULL::numeric as worst_channel_correctable, NULL::numeric as worst_channel_uncorrectable
+            FROM modem_signals GROUP BY 1 ORDER BY 1
+        """)
     
     modem_signals = {row['timestamp']: row for row in cur.fetchall()}
     
@@ -259,7 +365,7 @@ def get_data():
         tests.append(test)
     
     # Get modem restart events
-    if minutes:
+    if cutoff:
         cur.execute(
             "SELECT timestamp FROM modem_restarts WHERE timestamp >= %s ORDER BY timestamp",
             (cutoff,)
@@ -281,7 +387,7 @@ def get_data():
     uptime_timestamp = uptime_row['timestamp'].strftime('%Y-%m-%d %H:%M:%S') if uptime_row else None
     
     # Get weather data for the same time range (excluding future forecast data)
-    if minutes:
+    if cutoff:
         cur.execute(
             "SELECT timestamp, temperature, precipitation, weather_code FROM weather_data WHERE timestamp >= %s AND timestamp <= NOW() ORDER BY timestamp",
             (cutoff,)
@@ -313,19 +419,11 @@ def get_data():
             'upload': latest_speed_row['upload']
         }
     
+    # Calculate summary and hourly stats in SQL (avoids fetching all rows)
+    summary = get_summary_from_db(cur, cutoff)
+    hourly_avg = get_hourly_avg_from_db(cur, cutoff)
+
     conn.close()
-    
-    # Calculate summary statistics from ALL data before decimation
-    summary = calculate_summary(tests)
-    
-    # Calculate hourly statistics from ALL data before decimation
-    hourly_stats = [{'total': 0, 'loss': 0} for _ in range(24)]
-    for test in tests:
-        # Extract hour from Mountain Time timestamp string
-        hour = int(test['timestamp'].split(' ')[1].split(':')[0])
-        hourly_stats[hour]['total'] += 1
-        hourly_stats[hour]['loss'] += test.get('packet_loss', 0)
-    hourly_avg = [h['loss'] / h['total'] if h['total'] > 0 else 0 for h in hourly_stats]
     
     # Decimate data server-side if needed
     if len(tests) > 6000:

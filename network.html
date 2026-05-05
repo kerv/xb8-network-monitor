@@ -48,11 +48,13 @@
             <button class="time-btn" onclick="updateRange(15)">15 Min</button>
             <button class="time-btn" onclick="updateRange(30)">30 Min</button>
             <button class="time-btn" onclick="updateRange(60)">1 Hour</button>
+            <button class="time-btn" onclick="updateRange(180)">3 Hours</button>
             <button class="time-btn" onclick="updateRange(360)">6 Hours</button>
             <button class="time-btn" onclick="updateRange(720)">12 Hours</button>
             <button class="time-btn active" onclick="updateRange(1440)">24 Hours</button>
             <button class="time-btn" onclick="updateRange(4320)">3 Days</button>
             <button class="time-btn" onclick="updateRange(10080)">7 Days</button>
+            <button class="time-btn" onclick="updateRange(43200)">30 Days</button>
             <button class="time-btn" onclick="updateRange(null)">All</button>
         </div>
         
@@ -378,8 +380,9 @@
                     if (curr && prev && curr.correctable !== null && prev.correctable !== null) {
                         const corrDelta = Math.max(0, curr.correctable - prev.correctable);
                         const uncorrDelta = Math.max(0, curr.uncorrectable - prev.uncorrectable);
-                        channelRates[ch].correctable.push(corrDelta);
-                        channelRates[ch].uncorrectable.push(uncorrDelta);
+                        // Ignore unrealistic spikes from modem restarts/counter resets
+                        channelRates[ch].correctable.push(corrDelta > 10000000 ? null : corrDelta);
+                        channelRates[ch].uncorrectable.push(uncorrDelta > 10000000 ? null : uncorrDelta);
                     } else {
                         channelRates[ch].correctable.push(null);
                         channelRates[ch].uncorrectable.push(null);
@@ -1049,7 +1052,7 @@
             }
         });
         
-        fetchData();
+        fetchData(true);
         setInterval(fetchData, 10000);
     </script>
 </body>
