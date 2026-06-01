@@ -47,8 +47,8 @@ def ping_test(target='8.8.8.8'):
 
 def speed_test():
     try:
-        result = subprocess.run(['speedtest', '--accept-license', '--accept-gdpr', '--format=json', '--server-id=4207'], 
-                              capture_output=True, text=True, timeout=60)
+        result = subprocess.run(['speedtest', '--accept-license', '--accept-gdpr', '--format=json'], 
+                              capture_output=True, text=True, timeout=120)
         if result.returncode == 0:
             data = json.loads(result.stdout)
             download = data['download']['bandwidth'] / 125000

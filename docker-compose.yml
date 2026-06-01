@@ -1,4 +1,17 @@
 services:
+  postgres:
+    image: postgres:15
+    container_name: network-monitor-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=network_monitor
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - kerv_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   monitor:
     build: .
     container_name: network-monitor-app
@@ -8,3 +21,9 @@ services:
       - "5003:5000"
     restart: unless-stopped
     network_mode: host
+    depends_on:
+      - postgres
+
+volumes:
+  kerv_postgres_data:
+    external: true
